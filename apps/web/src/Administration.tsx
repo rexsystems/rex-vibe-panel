@@ -1,0 +1,44 @@
+import { useState } from 'react';
+import { Alert, Button, Checkbox, Code, Group, Modal, NumberInput, Select, Stack, Table, Tabs, Text, Textarea, TextInput, Title } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { useQuery } from '@tanstack/react-query';
+import { api, online, useAction } from './api';
+import { useLanguage } from './i18n';
+import { Empty, QueryState, useUser } from './App';
+import { NodeSetup } from './NodeSetup';
+
+export function Administration() {
+  const { t } = useLanguage(); const user = useUser();
+  const [tab, setTab] = useState<string | null>('nodes'), [addNode, setAddNode] = useState(false), [allocate, setAllocate] = useState(false), [enrollment, setEnrollment] = useState('');
+  const [autoSetup, setAutoSetup] = useState(false);
+  const nodes = useQuery<any[]>({ queryKey: ['nodes'], queryFn: () => api('/admin/nodes'), refetchInterval: 10000 });
+  const users = useQuery<any[]>({ queryKey: ['users'], queryFn: () => api('/admin/users') });
+  const [name, setName] = useState(''), [address, setAddress] = useState('');
+  const create = useAction(() => api('/admin/nodes', { name, address }), result => { setAddNode(false); setName(''); setAddress(''); setEnrollment(result.enrollmentToken); });
+  const newToken = useAction((id: string) => api(`/admin/nodes/${id}/token`, {}), result => setEnrollment(result.enrollmentToken));
+  return <Stack gap="xl"><Title order={1}>{t('Administration')}</Title><Tabs value={tab} onChange={setTab}><Tabs.List><Tabs.Tab value="nodes">{t('Nodes')}</Tabs.Tab><Tabs.Tab value="allocations">{t('Server allocations')}</Tabs.Tab><Tabs.Tab value="users">{t('Users')}</Tabs.Tab><Tabs.Tab value="settings">{t('Settings')}</Tabs.Tab></Tabs.List>
+    <Tabs.Panel value="nodes" pt="lg"><Stack><Group justify="space-between"><Text>{t('Capacity is reported by the connected agent.')}</Text><Group><Button variant="default" onClick={() => setAutoSetup(true)}>{t('Auto-setup local node')}</Button><Button onClick={() => setAddNode(true)}>{t('Add node')}</Button></Group></Group><QueryState query={nodes}>{!nodes.data?.length ? <Empty title={t('No nodes connected')}><Text>{t('Add a node, then start its REX agent using the enrollment token.')}</Text></Empty> : nodes.data.map(node => <div className="surface" style={{ padding: 20 }} key={node.id}><Group justify="space-between"><Stack gap={4} className="wrap"><Title order={2} size="h3">{node.name}</Title><Text size="sm">{node.address} · {t(online(node) ? 'Node online' : 'Node offline')}</Text>{node.capacity?.memoryMb && <Text size="sm">{node.capacity.memoryMb} MiB RAM · {node.capacity.cpus} CPU · {node.capacity.diskMb} MiB {t('Disk')}</Text>}</Stack><Button variant="default" loading={newToken.isPending} onClick={() => newToken.mutate(node.id)}>{t('New enrollment token')}</Button></Group></div>)}</QueryState></Stack></Tabs.Panel>
+    <Tabs.Panel value="allocations" pt="lg"><Stack align="flex-start"><Text>{t('Ask your administrator to allocate a Minecraft server to your account.')}</Text><Button onClick={() => setAllocate(true)}>{t('Allocate server')}</Button></Stack></Tabs.Panel>
+    <Tabs.Panel value="users" pt="lg"><QueryState query={users}><Table.ScrollContainer minWidth={420}><Table><Table.Thead><Table.Tr><Table.Th>{t('Email')}</Table.Th><Table.Th>{t('Account')}</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{users.data?.map(u => <Table.Tr key={u.id}><Table.Td>{u.email}</Table.Td><Table.Td>{u.role}</Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer></QueryState></Tabs.Panel>
+    <Tabs.Panel value="settings" pt="lg">{tab === 'settings' && <AdminSettings />}</Tabs.Panel>
+  </Tabs>
+  <Modal opened={addNode} onClose={() => setAddNode(false)} title={t('Add node')} centered><form onSubmit={e => { e.preventDefault(); create.mutate(); }}><Stack><TextInput label={t('Name')} required value={name} onChange={e => setName(e.target.value)} /><TextInput label={t('Address')} description="Public hostname or IPv4 address. Bedrock requires IPv4." required value={address} onChange={e => setAddress(e.target.value)} /><Button type="submit" loading={create.isPending}>{t('Add node')}</Button></Stack></form></Modal>
+  <Modal opened={!!enrollment} onClose={() => setEnrollment('')} title={t('Enrollment token')} centered><Stack><Text size="sm">{t('Token expires in one hour and can be used once.')}</Text><Code block style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{enrollment}</Code><Button variant="default" onClick={() => { void navigator.clipboard.writeText(enrollment).then(() => notifications.show({ message: 'Copied' })).catch(() => notifications.show({ color: 'red', message: 'Clipboard unavailable. Select and copy the token above.' })); }}>{t('Copy token')}</Button><Text size="sm">Set AGENT_ENROLLMENT_TOKEN and AGENT_PANEL_URL on the node, then start the REX agent.</Text></Stack></Modal>
+  <Modal opened={allocate} onClose={() => setAllocate(false)} title={t('Allocate server')} centered size="lg">{allocate && <AllocateForm nodes={nodes.data || []} users={users.data || []} owner={user.id} close={() => setAllocate(false)} />}</Modal>
+  {autoSetup && <NodeSetup opened onClose={() => setAutoSetup(false)} />}
+  </Stack>;
+}
+function AllocateForm({ nodes, users, owner, close }: { nodes: any[]; users: any[]; owner: string; close: () => void }) {
+  const { t } = useLanguage();
+  const [form, setForm] = useState({ name: '', ownerId: owner, nodeId: '', edition: 'paper', version: '', memoryMb: 2048, cpu: 1, diskMb: 10240, port: 25565, eulaAccepted: false });
+  const field = (key: string, value: unknown) => setForm(f => ({ ...f, [key]: value }));
+  const create = useAction(() => api('/admin/servers', form), close);
+  return <form onSubmit={e => { e.preventDefault(); create.mutate(); }}><Stack><TextInput label={t('Name')} required value={form.name} onChange={e => field('name', e.target.value)} /><Select label={t('Owner')} required searchable data={users.map(u => ({ value: u.id, label: u.email }))} value={form.ownerId} onChange={v => field('ownerId', v)} /><Select label={t('Nodes')} required data={nodes.filter(online).map(n => ({ value: n.id, label: `${n.name} (${n.address})` }))} value={form.nodeId} onChange={v => field('nodeId', v)} /><Group grow><Select label={t('Edition')} required data={['vanilla', 'paper', 'fabric', 'forge', 'neoforge', 'bedrock']} value={form.edition} onChange={v => setForm(f => ({ ...f, edition: v || 'paper', port: v === 'bedrock' ? 19132 : 25565 }))} /><TextInput label={t('Version')} required value={form.version} onChange={e => field('version', e.target.value)} /></Group><Group grow><NumberInput label={t('Memory (MiB)')} required min={512} max={262144} value={form.memoryMb} onChange={v => field('memoryMb', Number(v))} /><NumberInput label="CPU" required min={0.25} max={128} step={0.25} value={form.cpu} onChange={v => field('cpu', Number(v))} /></Group><Group grow><NumberInput label={t('Disk (MiB)')} required min={1024} value={form.diskMb} onChange={v => field('diskMb', Number(v))} /><NumberInput label={t('Port')} required min={1024} max={form.edition === 'bedrock' ? 65519 : 65535} value={form.port} onChange={v => field('port', Number(v))} /></Group>{form.edition === 'bedrock' && <Text size="sm">TCP {form.port}; UDP {form.port + 1}–{form.port + 16} (NetherNet).</Text>}<Checkbox label={<span>{t('I accept the Minecraft EULA for this server.')} <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">EULA</a></span>} required checked={form.eulaAccepted} onChange={e => field('eulaAccepted', e.target.checked)} />{create.error && <Alert color="red">{create.error.message}</Alert>}<Button type="submit" loading={create.isPending}>{t('Allocate server')}</Button></Stack></form>;
+}
+function AdminSettings() {
+  const { t } = useLanguage();
+  const settings = useQuery({ queryKey: ['admin-settings'], queryFn: () => api('/admin/settings') });
+  const [origins, setOrigins] = useState<string | undefined>();
+  const save = useAction(() => api('/admin/settings', { trustedProviderOrigins: (origins ?? settings.data?.trustedProviderOrigins?.join('\n') ?? '').split('\n').map((s: string) => s.trim()).filter(Boolean) }, 'PUT'), () => notifications.show({ message: t('Saved') }));
+  return <QueryState query={settings}><form onSubmit={e => { e.preventDefault(); save.mutate(); }}><Stack maw={650}><Textarea label={t('Trusted provider origins')} description={t('One origin per line. Only approve endpoints you operate or trust.')} minRows={5} value={origins ?? settings.data?.trustedProviderOrigins?.join('\n') ?? ''} onChange={e => setOrigins(e.target.value)} placeholder="http://host.docker.internal:11434" /><Button type="submit" loading={save.isPending} style={{ alignSelf: 'flex-start' }}>{t('Save')}</Button></Stack></form></QueryState>;
+}

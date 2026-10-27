@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: rex
+      POSTGRES_USER: rex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U rex -d rex"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  migrate:
+    build: .
+    image: rex-vibe-panel:local
+    command: [node, dist/server/packages/db/migrate.js]
+    environment:
+      DATABASE_URL: postgres://rex:${POSTGRES_PASSWORD}@db:5432/rex
+    depends_on:
+      db:
+        condition: service_healthy
+  panel:
+    build: .
+    image: rex-vibe-panel:local
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://rex:${POSTGRES_PASSWORD}@db:5432/rex
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      PORT: 3000
+      HOST: 0.0.0.0
+      LOCAL_AGENT_PANEL_URL: ws://panel:3000/api/v1/agent/connect
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    security_opt:
+      - label=disable
+    ports:
+      - 127.0.0.1:3000:3000
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    user: root
+  worker:
+    image: rex-vibe-panel:local
+    command: [node, dist/server/apps/worker/index.js]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://rex:${POSTGRES_PASSWORD}@db:5432/rex
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    user: node
+  agent:
+    image: rex-vibe-panel:local
+    profiles: [agent]
+    command: [node, dist/server/apps/agent/index.js]
+    environment:
+      AGENT_ENROLLMENT_TOKEN: ${AGENT_ENROLLMENT_TOKEN:-}
+      AGENT_PANEL_URL: ws://panel:3000/api/v1/agent/connect
+      AGENT_DATA_DIR: /var/lib/rex
+      AGENT_HOST_DATA_DIR: ${REX_DATA_DIR:?Set an absolute REX_DATA_DIR in .env}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${REX_DATA_DIR}:/var/lib/rex:z
+    security_opt:
+      - label=disable
+    depends_on:
+      - panel
+    restart: unless-stopped
+volumes:
+  postgres:

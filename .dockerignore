@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.env.agent
+.env.*.local
+.git
+.codex
+.cursor
+data
+test-results
+playwright-report

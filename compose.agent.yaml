@@ -1,0 +1,16 @@
+services:
+  agent:
+    build: .
+    image: rex-vibe-panel:local
+    command: [node, dist/server/apps/agent/index.js]
+    environment:
+      AGENT_PANEL_URL: ${AGENT_PANEL_URL:?Set the panel WSS URL}
+      AGENT_ENROLLMENT_TOKEN: ${AGENT_ENROLLMENT_TOKEN:-}
+      AGENT_DATA_DIR: /var/lib/rex
+      AGENT_HOST_DATA_DIR: ${REX_DATA_DIR:?Set an absolute host data directory}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${REX_DATA_DIR}:/var/lib/rex:z
+    security_opt:
+      - label=disable
+    restart: unless-stopped
