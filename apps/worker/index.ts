@@ -30,15 +30,15 @@ async function processRun(run: any) {
     server.run_id = run.id;
     const spec = (): ServerSpec => ({ ...server.config, id: server.id, name: server.name, ownerId: server.owner_id, nodeId: server.node_id, address: server.address });
     await withLock(run.server_id, `run:${run.id}`, async () => {
-      await emit(run.server_id, 'run.started', { id: run.id, chatOnly: !providerRow.tool_capable }, run.id);
-      const history = await sql`SELECT role,content FROM (SELECT id,role,content FROM messages WHERE server_id=${run.server_id} ORDER BY id DESC LIMIT 30) m ORDER BY id`;
+      await emit(run.server_id, 'run.started', { id: run.id, chatId: run.chat_id, chatOnly: !providerRow.tool_capable }, run.id);
+      const history = await sql`SELECT role,content FROM (SELECT id,role,content FROM messages WHERE chat_id=${run.chat_id} ORDER BY id DESC LIMIT 30) m ORDER BY id`;
       const messages: ChatMessage[] = [{ role: 'system', content: `${system}\nSelected server: ${JSON.stringify(spec())}\n${providerRow.tool_capable ? '' : 'This model has not passed tool calling. You can answer questions, but cannot perform actions. Tell the user to test a tool-capable provider when asked to execute.'}` }, ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 12000) }))];
       for (let step = 0; step < 64; step++) {
         signal.throwIfAborted();
-        const result = await generate(provider, messages, providerRow.tool_capable ? toolDefinitions : [], { signal, trustedOrigins, onText: async text => { await emit(run.server_id, 'assistant.delta', { text }, run.id); } });
+        const result = await generate(provider, messages, providerRow.tool_capable ? toolDefinitions : [], { signal, trustedOrigins, onText: async text => { await emit(run.server_id, 'assistant.delta', { text, chatId: run.chat_id }, run.id); } });
         if (result.content) {
-          await sql`INSERT INTO messages (server_id,user_id,role,content) VALUES (${run.server_id},${run.user_id},'assistant',${result.content})`;
-          await emit(run.server_id, 'assistant.message', { content: result.content }, run.id);
+          await sql`INSERT INTO messages (server_id,user_id,role,content,chat_id) VALUES (${run.server_id},${run.user_id},'assistant',${result.content},${run.chat_id})`;
+          await emit(run.server_id, 'assistant.message', { content: result.content, chatId: run.chat_id }, run.id);
         }
         messages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls.length ? result.toolCalls : undefined, providerData: result.providerData });
         if (!result.toolCalls.length) return;
@@ -86,12 +86,12 @@ async function processRun(run: any) {
     const [state] = await sql`SELECT cancel_requested FROM runs WHERE id=${run.id}`;
     finalStatus = state?.cancel_requested ? 'stopped' : 'failed';
     const content = state?.cancel_requested ? 'Stopped. Changes already completed are listed in the activity history.' : signal.aborted ? 'Execution interrupted or timed out. Inspect the activity history before retrying.' : String(error.message).slice(0, 2000);
-    await sql`INSERT INTO messages (server_id,user_id,role,content) VALUES (${run.server_id},${run.user_id},'assistant',${content})`;
-    await emit(run.server_id, 'assistant.message', { content }, run.id);
+    await sql`INSERT INTO messages (server_id,user_id,role,content,chat_id) VALUES (${run.server_id},${run.user_id},'assistant',${content},${run.chat_id})`;
+    await emit(run.server_id, 'assistant.message', { content, chatId: run.chat_id }, run.id);
   } finally {
     clearInterval(heartbeat); clearTimeout(timeout); active.delete(run.id);
     await sql`UPDATE runs SET status=${finalStatus},finished_at=now() WHERE id=${run.id} AND worker_id=${workerId}`;
-    await emit(run.server_id, `run.${finalStatus}`, { id: run.id }, run.id);
+    await emit(run.server_id, `run.${finalStatus}`, { id: run.id, chatId: run.chat_id }, run.id);
   }
 }
 async function recover() {

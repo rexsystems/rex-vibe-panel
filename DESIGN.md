@@ -1,5 +1,13 @@
 # REX Vibe Panel
 
-Simple Mantine administration UI. Chat is the primary workspace; Advanced exposes the underlying controls.
+Chat-first Minecraft server administration. The conversation with REX is the primary workspace; each server holds multiple chats, started with New chat. Advanced and Activity expose the underlying controls.
 
-ENERGY 1 / RHYTHM 1 / MOTION 1. System sans keeps forms readable without external font requests. Monospace is reserved for console output and code. Neutral surfaces keep long conversations readable; green identifies the primary action. User-selectable light/dark themes support different working environments. Small corner radii distinguish controls from larger panels. Spacing separates conversation, status, and technical detail. Icons are omitted where text explains the action. No invented logo, imagery, metrics, or activity.
+Dial: ENERGY 2 / RHYTHM 2 / MOTION 2.
+
+Palette stays neutral for long reads, with green as the single primary action color (same family as today). Light and dark themes stay user-selectable because operators work in different rooms and shifts. Small radii on controls, slightly larger on chat panels and message blocks so the conversation surface reads as the main stage.
+
+System sans keeps forms readable without external font requests. Monospace stays reserved for console output and code.
+
+Hugeicons (stroke rounded) mark actions and status: navigation, send, attach, stop, connection, server state. Icons sit next to labels wherever the control is primary; icon-only controls get an accessible name.
+
+Motion is limited to hover, focus, and short status transitions. No invented logo, imagery, metrics, or activity.

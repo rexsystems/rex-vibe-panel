@@ -27,7 +27,7 @@ beforeAll(async () => {
   await pg.initialise(); await pg.start(); await pg.createDatabase('rex');
   process.env.DATABASE_URL = `postgres://rex:test-password@localhost:${port}/rex`; process.env.ENCRYPTION_KEY = 'cd'.repeat(32);
   process.env.DEFAULT_AI_PROVIDER = '';
-  ({ sql } = await import('../packages/db/index.js')); await sql.unsafe(await readFile('packages/db/001_initial.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/002_node_setup.sql', 'utf8'));
+  ({ sql } = await import('../packages/db/index.js')); await sql.unsafe(await readFile('packages/db/001_initial.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/002_node_setup.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/003_chats.sql', 'utf8'));
   const { buildApp } = await import('../apps/api/app.js'); app = await buildApp({ logger: false, serveStatic: false, localNodeInstaller: {
     inspect: async () => ({ available: localDockerAvailable, reason: localDockerAvailable ? null : 'Docker fixture unavailable.', suggestedName: 'Fixture local node', suggestedAddress: '127.0.0.1' }),
     install: async input => { localInstallCalls++; if (localInstallFailure) throw new Error('Fixture agent startup failed.'); await input.progress('launching', 'Starting fixture agent.'); await sql`UPDATE nodes SET last_seen=now(),capacity=${sql.json({ memoryMb: 8192, cpus: 8, diskMb: 100000 })} WHERE id=${input.nodeId}`; },
@@ -169,14 +169,29 @@ describe.sequential('real PostgreSQL API and worker with simulated node/provider
     expect((await call('POST', `/servers/${serverId}/operations`, { type: 'shell', command: 'pwd' }, userCookie)).statusCode).toBe(200);
   });
   it('stops a queued run before any tool runs', async () => {
-    const [run] = await sql`INSERT INTO runs (server_id,user_id,provider_id,prompt,cancel_requested) VALUES (${serverId},${userId},${providerId},'Do not execute this cancelled request',true) RETURNING id`;
+    const [chat] = await sql`INSERT INTO chats (server_id,user_id,title) VALUES (${serverId},${userId},'Stop chat') RETURNING id`;
+    const [run] = await sql`INSERT INTO runs (server_id,user_id,provider_id,prompt,cancel_requested,chat_id) VALUES (${serverId},${userId},${providerId},'Do not execute this cancelled request',true,${chat.id}) RETURNING id`;
     await waitUntil(async () => (await sql`SELECT status FROM runs WHERE id=${run.id}`)[0]?.status === 'stopped');
     expect((await sql`SELECT id FROM agent_requests WHERE run_id=${run.id}`)).toHaveLength(0);
   });
   it('marks abandoned runs interrupted without replaying their tool requests', async () => {
-    const [run] = await sql`INSERT INTO runs (server_id,user_id,provider_id,prompt,status,worker_id,heartbeat_at) VALUES (${serverId},${userId},${providerId},'abandoned request','running','dead-worker',now()-interval '2 minutes') RETURNING id`;
+    const [chat] = await sql`INSERT INTO chats (server_id,user_id,title) VALUES (${serverId},${userId},'Abandoned chat') RETURNING id`;
+    const [run] = await sql`INSERT INTO runs (server_id,user_id,provider_id,prompt,status,worker_id,heartbeat_at,chat_id) VALUES (${serverId},${userId},${providerId},'abandoned request','running','dead-worker',now()-interval '2 minutes',${chat.id}) RETURNING id`;
     await waitUntil(async () => (await sql`SELECT status FROM runs WHERE id=${run.id}`)[0]?.status === 'interrupted', 20000);
     expect((await sql`SELECT id FROM agent_requests WHERE run_id=${run.id}`)).toHaveLength(0);
+  });
+  it('creates a separate chat thread with New chat', async () => {
+    const first = await call('GET', `/servers/${serverId}/chats`, undefined, userCookie);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().length).toBeGreaterThan(0);
+    const created = await call('POST', `/servers/${serverId}/chats`, {}, userCookie);
+    expect(created.statusCode, created.body).toBe(200);
+    expect(created.json().title).toBe('New chat');
+    const empty = await call('GET', `/servers/${serverId}/messages?chatId=${created.json().id}`, undefined, userCookie);
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual([]);
+    const listed = await call('GET', `/servers/${serverId}/chats`, undefined, userCookie);
+    expect(listed.json().some((c: any) => c.id === created.json().id)).toBe(true);
   });
   it('ships corresponding source and revokes a session on logout', async () => {
     const source = await call('GET', '/source/archive'); expect(source.statusCode).toBe(200); expect(source.headers['content-type']).toContain('application/x-tar'); expect(source.rawPayload.includes(Buffer.from('AGPL-3.0-only'))).toBe(true);

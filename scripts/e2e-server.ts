@@ -15,7 +15,7 @@ await pg.initialise(); await pg.start(); await pg.createDatabase('rex');
 process.env.DATABASE_URL = `postgres://rex:browser-test@localhost:${dbPort}/rex`;
 process.env.ENCRYPTION_KEY = 'ef'.repeat(32); process.env.APP_ORIGIN = 'http://127.0.0.1:3301';
 process.env.DEFAULT_AI_PROVIDER = '';
-const { sql } = await import('../packages/db/index.js'); await sql.unsafe(await readFile('packages/db/001_initial.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/002_node_setup.sql', 'utf8'));
+const { sql } = await import('../packages/db/index.js'); await sql.unsafe(await readFile('packages/db/001_initial.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/002_node_setup.sql', 'utf8')); await sql.unsafe(await readFile('packages/db/003_chats.sql', 'utf8'));
 const provider = createHttpServer(async (req, res) => {
   if (req.url?.endsWith('/models')) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'simulated-model' }, { id: 'simulated-model-2' }] })); return; }
   let raw = ''; for await (const b of req) raw += b; const body = JSON.parse(raw);

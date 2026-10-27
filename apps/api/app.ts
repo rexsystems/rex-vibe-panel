@@ -41,7 +41,8 @@ export async function buildApp(options: { logger?: boolean; serveStatic?: boolea
     'POST /api/v1/providers': providerInputSchema,
     'PUT /api/v1/providers/:id': providerInputSchema,
     'PATCH /api/v1/providers/:id/model': z.object({ model: z.string().min(1).max(200) }),
-    'POST /api/v1/servers/:id/chat': z.object({ prompt: z.string().min(1).max(16000), providerId: z.uuid() }),
+    'POST /api/v1/servers/:id/chat': z.object({ prompt: z.string().min(1).max(16000), providerId: z.uuid(), chatId: z.uuid().optional() }),
+    'POST /api/v1/servers/:id/chats': z.object({ title: z.string().trim().min(1).max(120).optional() }),
     'POST /api/v1/admin/nodes': z.object({ name: z.string().min(1).max(80), address: z.string().min(1).max(253) }),
     'POST /api/v1/admin/nodes/local': z.object({ name: z.string().trim().min(1).max(80), address: z.string().trim().min(1).max(253) }),
     'POST /api/v1/admin/servers': serverInputSchema,
@@ -190,22 +191,62 @@ export async function buildApp(options: { logger?: boolean; serveStatic?: boolea
     ? sql`SELECT s.*, n.name AS node_name,n.address,n.last_seen FROM servers s JOIN nodes n ON n.id=s.node_id ORDER BY s.created_at`
     : sql`SELECT s.*, n.name AS node_name,n.address,n.last_seen FROM servers s JOIN nodes n ON n.id=s.node_id WHERE s.owner_id=${req.user.id} ORDER BY s.created_at`);
   app.get('/api/v1/servers/:id', { preHandler: auth }, serverFor);
-  app.get('/api/v1/servers/:id/messages', { preHandler: auth }, async req => { const s = await serverFor(req); return sql`SELECT * FROM messages WHERE server_id=${s.id} ORDER BY id`; });
-  app.get('/api/v1/servers/:id/runs', { preHandler: auth }, async req => { const s = await serverFor(req); return sql`SELECT id,status,cancel_requested,created_at,finished_at FROM runs WHERE server_id=${s.id} ORDER BY created_at DESC LIMIT 30`; });
+  const resolveChat = async (serverId: string, userId: string, chatId?: string) => {
+    if (chatId) {
+      const [chat] = await sql`SELECT * FROM chats WHERE id=${chatId} AND server_id=${serverId}`;
+      if (!chat) throw fail('Chat not found.', 404);
+      return chat;
+    }
+    const [latest] = await sql`SELECT * FROM chats WHERE server_id=${serverId} ORDER BY updated_at DESC LIMIT 1`;
+    if (latest) return latest;
+    const [created] = await sql`INSERT INTO chats (server_id,user_id,title) VALUES (${serverId},${userId},'New chat') RETURNING *`;
+    return created;
+  };
+  app.get('/api/v1/servers/:id/chats', { preHandler: auth }, async req => {
+    const server = await serverFor(req);
+    const existing = await sql`SELECT * FROM chats WHERE server_id=${server.id} ORDER BY updated_at DESC`;
+    if (existing.length) return existing;
+    const [created] = await sql`INSERT INTO chats (server_id,user_id,title) VALUES (${server.id},${req.user.id},'New chat') RETURNING *`;
+    return [created];
+  });
+  app.post('/api/v1/servers/:id/chats', { preHandler: auth }, async req => {
+    const server = await serverFor(req);
+    const input = z.object({ title: z.string().trim().min(1).max(120).optional() }).parse(req.body || {});
+    const [created] = await sql`INSERT INTO chats (server_id,user_id,title) VALUES (${server.id},${req.user.id},${input.title || 'New chat'}) RETURNING *`;
+    return created;
+  });
+  app.get('/api/v1/servers/:id/messages', { preHandler: auth }, async req => {
+    const server = await serverFor(req);
+    const chatId = z.uuid().optional().parse((req.query as any).chatId);
+    const chat = await resolveChat(server.id, req.user.id, chatId);
+    return sql`SELECT * FROM messages WHERE chat_id=${chat.id} ORDER BY id`;
+  });
+  app.get('/api/v1/servers/:id/runs', { preHandler: auth }, async req => {
+    const server = await serverFor(req);
+    const chatId = z.uuid().optional().parse((req.query as any).chatId);
+    if (chatId) {
+      const chat = await resolveChat(server.id, req.user.id, chatId);
+      return sql`SELECT id,status,cancel_requested,chat_id,created_at,finished_at FROM runs WHERE chat_id=${chat.id} ORDER BY created_at DESC LIMIT 30`;
+    }
+    return sql`SELECT id,status,cancel_requested,chat_id,created_at,finished_at FROM runs WHERE server_id=${server.id} ORDER BY created_at DESC LIMIT 30`;
+  });
   app.get('/api/v1/servers/:id/events', { preHandler: auth }, async req => {
     const s = await serverFor(req), after = z.coerce.number().int().min(0).default(0).parse((req.query as any).after);
     return sql`SELECT * FROM events WHERE server_id=${s.id} AND id>${after} ORDER BY id LIMIT 1000`;
   });
   app.post('/api/v1/servers/:id/chat', { preHandler: auth }, async req => {
-    const server = await serverFor(req), input = z.object({ prompt: z.string().trim().min(1).max(16000), providerId: z.uuid() }).parse(req.body);
+    const server = await serverFor(req), input = z.object({ prompt: z.string().trim().min(1).max(16000), providerId: z.uuid(), chatId: z.uuid().optional() }).parse(req.body);
     const [provider] = await sql`SELECT * FROM providers WHERE id=${input.providerId} AND owner_id=${req.user.id}`;
     if (!provider) throw fail('Select one of your providers.', 404);
+    const chat = await resolveChat(server.id, req.user.id, input.chatId);
+    const title = chat.title === 'New chat' || chat.title === 'Chat' ? input.prompt.slice(0, 80) : chat.title;
     const run = await sql.begin(async tx => {
-      const [created] = await tx`INSERT INTO runs (server_id,user_id,provider_id,prompt) VALUES (${server.id},${req.user.id},${provider.id},${input.prompt}) RETURNING *`;
-      await tx`INSERT INTO messages (server_id,user_id,role,content) VALUES (${server.id},${req.user.id},'user',${input.prompt})`;
+      await tx`UPDATE chats SET title=${title}, updated_at=now() WHERE id=${chat.id}`;
+      const [created] = await tx`INSERT INTO runs (server_id,user_id,provider_id,prompt,chat_id) VALUES (${server.id},${req.user.id},${provider.id},${input.prompt},${chat.id}) RETURNING *`;
+      await tx`INSERT INTO messages (server_id,user_id,role,content,chat_id) VALUES (${server.id},${req.user.id},'user',${input.prompt},${chat.id})`;
       return created;
     });
-    await emit(server.id, 'run.queued', { id: run.id }, run.id); return { id: run.id };
+    await emit(server.id, 'run.queued', { id: run.id, chatId: chat.id }, run.id); return { id: run.id, chatId: chat.id };
   });
   app.post('/api/v1/servers/:id/runs/:runId/stop', { preHandler: auth }, async req => {
     const s = await serverFor(req);

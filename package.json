@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
-  "repository": { "type": "git", "url": "https://github.com/rexsystems/rex-vibe-panel.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rexsystems/rex-vibe-panel.git"
+  },
   "homepage": "https://github.com/rexsystems/rex-vibe-panel#readme",
-  "bugs": { "url": "https://github.com/rexsystems/rex-vibe-panel/issues" },
+  "bugs": {
+    "url": "https://github.com/rexsystems/rex-vibe-panel/issues"
+  },
   "packageManager": "pnpm@10.28.2",
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -35,6 +40,8 @@
     "@fastify/swagger": "^9.7.0",
     "@fastify/swagger-ui": "^6.1.2",
     "@fastify/websocket": "^11.2.0",
+    "@hugeicons/core-free-icons": "^4.3.5",
+    "@hugeicons/react": "^1.1.10",
     "@mantine/core": "^8.3.0",
     "@mantine/form": "^8.3.0",
     "@mantine/hooks": "^8.3.0",
